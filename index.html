@@ -215,7 +215,9 @@
 <div class="toolbar">
   <span class="toolbar-label">Ações:</span>
   <button class="btn btn-cyan" onclick="window.print()">🖨 Imprimir</button>
-  <button class="btn btn-ghost" onclick="exportHTML()">💾 Salvar HTML</button>
+  <button class="btn btn-cyan" onclick="salvarAlteracoes()">💾 Salvar alterações</button>
+  <button class="btn btn-ghost" onclick="resetGitHubToken()">🔐 Token GitHub</button>
+  <button class="btn btn-ghost" onclick="exportHTML()">📥 Salvar HTML</button>
   <button class="btn btn-ghost" id="editModeBtn" onclick="toggleEditMode()">✏️ Modo Edição</button>
   <button class="btn btn-ghost" onclick="openDatasModal()">🗓 Datas Comemorativas</button>
   <div class="month-nav" id="monthNav"><button class="month-btn" id="mnav0">Jan</button><button class="month-btn" id="mnav1">Fev</button><button class="month-btn" id="mnav2">Mar</button><button class="month-btn active" id="mnav3">Abr</button><button class="month-btn" id="mnav4">Mai</button><button class="month-btn" id="mnav5">Jun</button><button class="month-btn" id="mnav6">Jul</button><button class="month-btn" id="mnav7">Ago</button><button class="month-btn" id="mnav8">Set</button><button class="month-btn" id="mnav9">Out</button><button class="month-btn" id="mnav10">Nov</button><button class="month-btn" id="mnav11">Dez</button></div>
@@ -1211,14 +1213,14 @@ _cardIn.addEventListener('change',e=>{
   const idx=POSTS.findIndex(p=>p.month===mc.month&&p.day===_cardDay2);
   if(idx<0)return;
   let n=0;
-  files.forEach(f=>{const r=new FileReader();r.onload=ev=>{POSTS[idx].imgs=POSTS[idx].imgs||[];POSTS[idx].imgs.push(ev.target.result);if(++n===files.length){renderAll();showToast(`${files.length} imagem(ns) adicionada(s)!`);}};r.readAsDataURL(f);});
+  files.forEach(f=>{const r=new FileReader();r.onload=ev=>{POSTS[idx].imgs=POSTS[idx].imgs||[];POSTS[idx].imgs.push(ev.target.result);if(++n===files.length){renderAll();saveSiteData();showToast(`${files.length} imagem(ns) adicionada(s)!`);}};r.readAsDataURL(f);});
   _cardIn.value='';
 });
 function triggerCardImg(mIdx,day){_cardMIdx=mIdx;_cardDay2=day;_cardIn.click();}
 function removeCardThumb(mIdx,day,idx){
   const mc=MONTHS_CONFIG[mIdx];
   const i=POSTS.findIndex(p=>p.month===mc.month&&p.day===day);
-  if(i>=0){POSTS[i].imgs.splice(idx,1);renderAll();showToast('Imagem removida.');}
+  if(i>=0){POSTS[i].imgs.splice(idx,1);renderAll();saveSiteData();showToast('Imagem removida.');}
 }
 
 function onThumbClick(mIdx,day,idx){
@@ -1303,16 +1305,227 @@ function saveDatas(){
   MONTHS_CONFIG[mIdx].special = newSpecial;
   closeDatasModal();
   renderAll();
+  saveSiteData();
   showToast('🗓 Datas comemorativas atualizadas!');
 }
 document.getElementById('datasMonthSel').addEventListener('change', renderDatasList);
 document.getElementById('datasOverlay').addEventListener('click', e=>{if(e.target===e.currentTarget)closeDatasModal();});
 
+
+const STORAGE_KEY = 'calendario_editorial_bem_bolado_2026';
+const GITHUB_CFG_KEY = 'calendar-github-pages-config-v1';
+
+function getSiteData(){
+  return {
+    header:{
+      client:(document.getElementById('hdrClient')?.innerText||'').trim(),
+      year:(document.getElementById('hdrYear')?.innerText||'').trim(),
+      sub:(document.getElementById('hdrSub')?.innerText||'').trim()
+    },
+    posts: POSTS,
+    planData: PLAN_DATA,
+    monthsConfig: MONTHS_CONFIG.map(mc=>({notes:mc.notes||'', special:mc.special||{}}))
+  };
+}
+
+function applySiteData(data){
+  if(!data) return;
+  if(data.header){
+    if(typeof data.header.client==='string') document.getElementById('hdrClient').innerText = data.header.client;
+    if(typeof data.header.year==='string') document.getElementById('hdrYear').innerText = data.header.year;
+    if(typeof data.header.sub==='string') document.getElementById('hdrSub').innerText = data.header.sub;
+  }
+  if(Array.isArray(data.posts)) POSTS = data.posts.map(p => ({...p, imgs:p.imgs||[], caption:p.caption||'', descricao:p.descricao||'', imgObs:p.imgObs||'', roteiro:p.roteiro||'', videoLink:p.videoLink||'', slides:p.slides||'', slidesNum:p.slidesNum||'', postado:!!p.postado}));
+  if(data.planData && typeof data.planData==='object') PLAN_DATA = data.planData;
+  if(Array.isArray(data.monthsConfig)){
+    data.monthsConfig.forEach((saved, idx)=>{
+      if(!MONTHS_CONFIG[idx] || !saved) return;
+      if(typeof saved.notes==='string') MONTHS_CONFIG[idx].notes = saved.notes;
+      if(saved.special && typeof saved.special==='object') MONTHS_CONFIG[idx].special = saved.special;
+    });
+  }
+}
+
+function saveSiteData(showFeedback=true){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(getSiteData()));
+    if(showFeedback) showToast('💾 Alterações salvas neste navegador!');
+  }catch(err){
+    console.error(err);
+    if(showFeedback) showToast('⚠️ Não foi possível salvar neste navegador.');
+  }
+}
+
+function loadSiteData(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return;
+    applySiteData(JSON.parse(raw));
+  }catch(err){
+    console.error(err);
+  }
+}
+
+function inferGitHubPagesConfig(){
+  const host = window.location.hostname || '';
+  const rawPath = window.location.pathname || '/';
+  const owner = host.replace(/\.github\.io$/i,'');
+  const cleanPath = rawPath.split('?')[0].split('#')[0];
+  const segments = cleanPath.replace(/^\/+|\/+$/g,'').split('/').filter(Boolean);
+  let repo = '';
+  let filePath = 'index.html';
+  if(owner){
+    const isUserOrOrgPage = segments.length === 0 || (segments.length === 1 && /^index\.html?$/i.test(segments[0]));
+    if(isUserOrOrgPage){
+      repo = `${owner}.github.io`;
+      filePath = segments.length ? segments[0] : 'index.html';
+    } else {
+      repo = segments[0];
+      const rest = segments.slice(1);
+      filePath = rest.length ? rest.join('/') : 'index.html';
+    }
+  }
+  filePath = (filePath || 'index.html').replace(/^\/+/, '').replace(/\/+/g, '/');
+  if(!/\.html?$/i.test(filePath)){
+    filePath = filePath.replace(/\/+$/,'') + '/index.html';
+  }
+  return { owner, repo, branch: 'main', path: filePath, token: '' };
+}
+
+function loadGitHubPagesConfig(){
+  const inferred = inferGitHubPagesConfig();
+  try{
+    const saved = JSON.parse(localStorage.getItem(GITHUB_CFG_KEY) || '{}');
+    return {
+      ...inferred,
+      branch: saved.branch || inferred.branch,
+      token: saved.token || ''
+    };
+  }catch(_err){
+    return inferred;
+  }
+}
+
+function saveGitHubPagesConfig(cfg){
+  localStorage.setItem(GITHUB_CFG_KEY, JSON.stringify({
+    branch: cfg.branch || 'main',
+    token: cfg.token || ''
+  }));
+}
+
+function resetGitHubToken(){
+  localStorage.removeItem(GITHUB_CFG_KEY);
+  showToast('Configuração local removida. No próximo salvamento o token será solicitado novamente.');
+}
+
+async function ensureGitHubPagesConfig(){
+  const cfg = loadGitHubPagesConfig();
+  if(!cfg.owner || !cfg.repo || !cfg.path){
+    throw new Error('Não foi possível identificar automaticamente o repositório e o caminho do arquivo.');
+  }
+  if(!cfg.token){
+    const token = window.prompt('Cole um token do GitHub com permissão de Contents: Read and Write para salvar no site.\n\nEle ficará salvo apenas neste navegador.', '');
+    if(!token) throw new Error('Salvamento cancelado.');
+    cfg.token = token.trim();
+  }
+  if(!cfg.branch){
+    cfg.branch = (window.prompt('Qual branch deve ser atualizada?', 'main') || 'main').trim() || 'main';
+  }
+  saveGitHubPagesConfig(cfg);
+  return cfg;
+}
+
+function utf8ToBase64(str){
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  const chunk = 0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function jsonForInlineScript(value){
+  return JSON.stringify(value).replace(/<\//g, '<\\/');
+}
+
+function upsertPersistedStatePatch(html, state){
+  const patch = `\n<script id="persisted-calendar-state">\nwindow.__PERSISTED_CALENDAR_STATE__ = ${jsonForInlineScript(state)};\n<\/script>\n`;
+  if(/<script id="persisted-calendar-state">[\s\S]*?<\/script>/i.test(html)){
+    return html.replace(/<script id="persisted-calendar-state">[\s\S]*?<\/script>/i, patch.trim());
+  }
+  return html.replace(/<\/body>/i, patch + '</body>');
+}
+
+async function commitHtmlToGitHub(html){
+  const cfg = await ensureGitHubPagesConfig();
+  const apiBase = `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/contents/${cfg.path.split('/').map(encodeURIComponent).join('/')}`;
+  let sha = null;
+  const existing = await fetch(`${apiBase}?ref=${encodeURIComponent(cfg.branch)}`, {
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'Authorization': `Bearer ${cfg.token}`
+    }
+  });
+  if(existing.status === 200){
+    const current = await existing.json();
+    sha = current.sha;
+  }else if(existing.status !== 404){
+    const errText = await existing.text();
+    throw new Error(`Não foi possível salvar no GitHub (${existing.status}). ${errText}`);
+  }
+  const body = {
+    message: `Atualiza ${cfg.path} via calendário editorial`,
+    content: utf8ToBase64(html),
+    branch: cfg.branch
+  };
+  if(sha) body.sha = sha;
+  const response = await fetch(apiBase, {
+    method: 'PUT',
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'Authorization': `Bearer ${cfg.token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  if(!response.ok){
+    const errText = await response.text();
+    throw new Error(`Não foi possível salvar no GitHub (${response.status}). ${errText}`);
+  }
+  return response.json();
+}
+
+function buildPersistentHtml(){
+  saveSiteData(false);
+  const client=(document.getElementById('hdrClient')?.innerText||'cliente').trim();
+  const year=(document.getElementById('hdrYear')?.innerText||'2026').trim();
+  const sub=(document.getElementById('hdrSub')?.innerText||'').trim();
+  let html = `<!DOCTYPE html>\n${document.documentElement.outerHTML}`;
+  html = html.replace(/(<span contenteditable="true" id="hdrClient"[^>]*>)([\s\S]*?)(<\/span>)/, `$1${client}$3`);
+  html = html.replace(/(<em contenteditable="true" id="hdrYear"[^>]*>)([\s\S]*?)(<\/em>)/, `$1${year}$3`);
+  html = html.replace(/(<span[^>]*id="hdrSub"[^>]*>)([\s\S]*?)(<\/span>)/, `$1${sub}$3`);
+  html = upsertPersistedStatePatch(html, getSiteData());
+  return html;
+}
+
+async function salvarAlteracoes(){
+  try{
+    showToast('Salvando no site...');
+    const html = buildPersistentHtml();
+    await commitHtmlToGitHub(html);
+    showToast('Alterações salvas no site com sucesso!');
+  }catch(err){
+    console.error(err);
+    showToast(err && err.message ? err.message : 'Não foi possível salvar no site.');
+  }
+}
+
 function exportHTML(){
   const client=(document.getElementById('hdrClient')?.innerText||'cliente').trim();
   const year=(document.getElementById('hdrYear')?.innerText||'2026').trim();
   const slug=(client||'cliente').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
-  const html=`<!DOCTYPE html>\n${document.documentElement.outerHTML}`;
+  const html=buildPersistentHtml();
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));
   a.download=`calendario_editorial_${slug}_${year}.html`;
@@ -1331,8 +1544,13 @@ function showToast(msg){
 document.getElementById('modalOverlay').addEventListener('click',e=>{if(e.target===e.currentTarget)closeModal();});
 
 // ── Init ──
+loadSiteData();
 buildMonthNav();
 renderAll();
+['hdrClient','hdrYear','hdrSub'].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el){ el.addEventListener('input', ()=>saveSiteData(false)); el.addEventListener('blur', ()=>saveSiteData(false)); }
+});
 
 const observer = new IntersectionObserver((entries)=>{
   entries.forEach(e=>{
